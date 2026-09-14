@@ -1,6 +1,25 @@
+<div align="center">
+
+<img src="assets/zeta.png" alt="Zeta, the Reconclave mascot" width="140">
+
 # FieldDeck
 
+### Observe nearby. Coordinate anywhere. Bring evidence home.
+
+[![Hardware](https://img.shields.io/badge/hardware-Cardputer_ADV-0e222e?style=flat-square)](#build)
+[![Build](https://img.shields.io/badge/build-PlatformIO-00cdd7?style=flat-square)](#build)
+[![Status](https://img.shields.io/badge/status-development_preview-ffaa1c?style=flat-square)](#firmware-capabilities)
+[![Family](https://img.shields.io/badge/family-Reconclave-fff2d7?style=flat-square)](https://github.com/Zetascrub/Reconclave)
+
 **The portable Reconclave console for M5Stack Cardputer ADV.**
+
+[Reconclave](https://github.com/Zetascrub/Reconclave) ·
+[ZetaDongle](https://github.com/Zetascrub/ZetaDongle) ·
+[Relay](https://github.com/Zetascrub/Relay) ·
+[Sightline](https://github.com/Zetascrub/Sightline) ·
+[Command](https://github.com/Zetascrub/Reconclave-Command)
+
+</div>
 
 FieldDeck is a standalone field toolkit and a cooperating Reconclave node. It
 can observe, inspect, and retain evidence without a coordinator; when joined to
@@ -68,7 +87,6 @@ workspace, then copy the FieldDeck header into this repository:
 cd ../Reconclave
 python3 tools/provision_fleet.py --desktop-id rc-desktop-example \
   --p4-id rc-p4-example --cardputer-id rc-adv-example
-cp devices/cardputer-adv/src/generated_trust.h ../FieldDeck/src/generated_trust.h
 cd ../FieldDeck
 ```
 
