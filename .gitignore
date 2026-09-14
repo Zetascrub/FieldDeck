@@ -1,0 +1,10 @@
+.pio/
+/build-tests/
+.vscode/
+src/generated_trust.h
+.reconclave-provisioning/
+evidence/
+*.bin
+*.elf
+*.log
+.DS_Store
