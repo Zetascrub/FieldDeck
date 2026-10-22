@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
+#include "instance_link.h"
 #include <M5Cardputer.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
@@ -32,7 +33,7 @@
 
 namespace {
 
-constexpr char kFirmware[] = "0.1.0";
+constexpr char kFirmware[] = "0.1.1-hosted.1";
 constexpr char kProtocol[] = "reconclave/1";
 constexpr char kService[] = "reconclave";
 constexpr char kTransport[] = "tcp";
@@ -214,6 +215,7 @@ String selectedNodeId;
 size_t nodeSelection{0};
 String wifiSsid;
 String wifiPassword;
+unsigned long nextHostedCheckMs{0};
 String input;
 String notice;
 String deviceId;
@@ -2575,9 +2577,9 @@ void fillAnnouncement(JsonDocument& document) {
   resources["storage_free_bytes"] = 0;
   payload["status"] = "ready";
   JsonObject security = payload["security"].to<JsonObject>();
-  security["paired"] = true;
+  security["paired"] = peerKeyValid || executionKeyValid;
   security["boot_nonce"] = nodeBootNonceHex;
-  security["mode"] = "provisioned-hmac-sha256-128";
+  security["mode"] = security["paired"].as<bool>() ? "provisioned-hmac-sha256-128" : "unprovisioned";
   security["primary_coordinator"] = RC_PROVISIONED_PRIMARY_ID;
   security["coordinator_priority"] = RC_COORDINATOR_PRIORITY;
 }
@@ -4071,10 +4073,67 @@ void startScoutJob() {
 void startConnecting() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+  WiFi.setAutoReconnect(true);
   connectStartedMs = millis();
   screen = ScreenState::Connecting;
   notice = "";
   draw();
+}
+
+// One-time USB provisioning for headless fleet setup. Credentials arrive over
+// the local serial port and are stored only in the existing device NVS keys.
+// The JSON form permits spaces and punctuation in either value. Never echo
+// the submitted line: it contains the network password.
+void pollSerialProvisioning() {
+  static String line;
+  while (Serial.available() > 0) {
+    const char value = static_cast<char>(Serial.read());
+    if (value == '\r') continue;
+    if (value != '\n') {
+      if (line.length() < 512) line += value;
+      else line = "";
+      continue;
+    }
+    if (line.startsWith("instance-json ")) {
+      JsonDocument request;
+      const DeserializationError error = deserializeJson(request, line.substring(14));
+      line = "";
+      const String instanceId = request["instance_id"] | "";
+      const String enrollmentId = request["device_id"] | "";
+      const String credential = request["credential"] | "";
+      if (error || !reconclave_hosted::validId(instanceId, 24) ||
+          !reconclave_hosted::validId(enrollmentId, 16) ||
+          !reconclave_hosted::validId(credential, 43)) {
+        Serial.println("instance: invalid enrollment request");
+        continue;
+      }
+      preferences.putString("host_inst", instanceId);
+      preferences.putString("host_dev", enrollmentId);
+      preferences.putString("host_key", credential);
+      nextHostedCheckMs = millis();
+      Serial.println("instance: saved; awaiting Wi-Fi and verified HTTPS check-in");
+      continue;
+    }
+    if (!line.startsWith("wifi-json ")) {
+      line = "";
+      continue;
+    }
+    JsonDocument request;
+    const DeserializationError error = deserializeJson(request, line.substring(10));
+    line = "";
+    const String ssid = request["ssid"] | "";
+    const String password = request["password"] | "";
+    if (error || ssid.isEmpty() || ssid.length() > 32 || password.length() > 63) {
+      Serial.println("wifi: invalid provisioning request");
+      continue;
+    }
+    preferences.putString("ssid", ssid);
+    preferences.putString("password", password);
+    wifiSsid = ssid;
+    wifiPassword = password;
+    Serial.println("wifi: saved to device settings; connecting");
+    startConnecting();
+  }
 }
 
 void workOffline() {
@@ -5643,9 +5702,9 @@ void setup() {
   // relationship has a distinct key; no fleet-wide command secret exists.
   trustedP4Id = RC_PROVISIONED_P4_ID;
   memcpy(peerKey, RC_PROVISIONED_P4_KEY, sizeof(peerKey));
-  peerKeyValid = true;
+  peerKeyValid = std::any_of(std::begin(peerKey), std::end(peerKey), [](uint8_t byte) { return byte != 0; });
   memcpy(executionKey, RC_PROVISIONED_PRIMARY_KEY, sizeof(executionKey));
-  executionKeyValid = true;
+  executionKeyValid = std::any_of(std::begin(executionKey), std::end(executionKey), [](uint8_t byte) { return byte != 0; });
   uint8_t nodeBootNonce[16];
   esp_fill_random(nodeBootNonce, sizeof(nodeBootNonce));
   hexEncode(nodeBootNonceHex, nodeBootNonce, sizeof(nodeBootNonce));
@@ -5661,6 +5720,7 @@ void setup() {
 }
 
 void loop() {
+  pollSerialProvisioning();
   M5Cardputer.update();
   // NFC target replies have tight deadlines. Keep emulation exclusive on the
   // UI task; don't interleave HTTP waits, SD writes, scans or idle animations.
@@ -5672,6 +5732,14 @@ void loop() {
     }
     delay(1);
     return;
+  }
+  if (WiFi.status() == WL_CONNECTED && preferences.isKey("host_inst") &&
+      static_cast<int32_t>(millis() - nextHostedCheckMs) >= 0) {
+    const bool connected = reconclave_hosted::checkIn(
+        preferences.getString("host_inst", ""), preferences.getString("host_dev", ""),
+        preferences.getString("host_key", ""), deviceId, kFirmware);
+    nextHostedCheckMs = millis() + (connected ? 300000UL : 10000UL);
+    Serial.println(connected ? "instance: connected" : "instance: check-in pending");
   }
   updateObservationScans();
   if (cap::update() && (screen == ScreenState::SubGhz || screen == ScreenState::NfcResults)) draw();
@@ -5709,6 +5777,7 @@ void loop() {
     } else if (millis() - connectStartedMs > kConnectTimeoutMs) {
       notice = "Connection failed; W to change";
       draw();
+      WiFi.reconnect();
       connectStartedMs = millis();
     }
   }
